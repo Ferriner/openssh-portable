@@ -740,6 +740,40 @@ server_input_hostkeys_prove(struct ssh *ssh, struct sshbuf **respp)
 	return success;
 }
 
+/* Custom: permitremoteopen functionality */
+static int
+permit_remote_forwarding(struct sshauthopt *auth_opts, struct Forward *fwd)
+{
+	char *tmp, *cp, *rforwardhost;
+	int rforwardport;
+	int permit = 0;
+	size_t i;
+
+	debug("permit_remote_forwarding: verifying access to %s:%i", fwd->listen_host, fwd->listen_port);
+	for (i = 0; i < auth_opts->npermitremoteopen; i++) {
+		tmp = cp = xstrdup(auth_opts->permitremoteopen[i]);
+		/* This shouldn't fail as it has already been checked */
+		if ((rforwardhost = hpdelim(&cp)) == NULL)
+			fatal("%s: internal error: permitremote hpdelim", __func__);
+		rforwardhost = cleanhostname(rforwardhost);
+
+		if (cp == NULL || (rforwardport = permitopen_port(cp)) < 0)
+			fatal("%s: internal error: permitremoteopen port",
+				  __func__);
+
+		debug("permit_remote_forwarding: comparing with permitted host %s:%i", rforwardhost, rforwardport);
+		if (strcmp(fwd->listen_host, rforwardhost) == 0 && (fwd->listen_port == rforwardport)) {
+			permit = 1;
+			debug("permit_remote_forwarding: accepted permission to host %s:%i", rforwardhost, rforwardport);
+		}
+		free(tmp);
+		if (permit == 1) {
+			break;
+		}
+	}
+	return permit;
+}
+
 static int
 server_input_global_request(int type, u_int32_t seq, struct ssh *ssh)
 {
@@ -772,8 +806,10 @@ server_input_global_request(int type, u_int32_t seq, struct ssh *ssh)
 		    options.disable_forwarding ||
 		    (!want_reply && fwd.listen_port == 0) ||
 		    (fwd.listen_port != 0 &&
-		     !bind_permitted(fwd.listen_port, pw->pw_uid))) {
-			success = 0;
+		     !bind_permitted(fwd.listen_port, pw->pw_uid)) ||
+				/* Custom: permitremoteopen functionality */
+				!permit_remote_forwarding(auth_opts, &fwd)) {
+ 			success = 0;
 			packet_send_debug("Server has disabled port forwarding.");
 		} else {
 			/* Start listening on the port */

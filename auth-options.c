@@ -282,6 +282,11 @@ sshauthopt_free(struct sshauthopt *opts)
 	for (i = 0; i < opts->npermitopen; i++)
 		free(opts->permitopen[i]);
 	free(opts->permitopen);
+	
+	/* Custom: permitremoteopen functionality */
+	for (i = 0; i < opts->npermitremoteopen; i++)
+		free(opts->permitremoteopen[i]);
+	free(opts->permitremoteopen);
 
 	explicit_bzero(opts, sizeof(*opts));
 	free(opts);
@@ -438,6 +443,50 @@ sshauthopt_parse(const char *opts, const char **errstrp)
 				goto alloc_fail;
 			}
 			ret->permitopen[ret->npermitopen++] = opt;
+		} else if (opt_match(&opts, "permitremoteopen")) {
+			/* Custom: add list of permitted remote forwards */ 
+			if (ret->npermitremoteopen > INT_MAX) {
+				errstr = "too many permitremoteopens";
+				goto fail;
+			}
+			if ((opt = opt_dequote(&opts, &errstr)) == NULL)
+				goto fail;
+			if ((tmp = strdup(opt)) == NULL) {
+				free(opt);
+				goto alloc_fail;
+			}
+			cp = tmp;
+			/* validate syntax of permitopen before recording it. */
+			host = hpdelim(&cp);
+			if (host == NULL || strlen(host) >= NI_MAXHOST) {
+				free(tmp);
+				free(opt);
+				errstr = "invalid permitremoteopen hostname";
+				goto fail;
+			}
+			/*
+			 * don't want to use permitopen_port to avoid
+			 * dependency on channels.[ch] here.
+			 */
+			if (cp == NULL ||
+				(strcmp(cp, "*") != 0 && a2port(cp) <= 0)) {
+				free(tmp);
+				free(opt);
+				errstr = "invalid permitremoteopen port";
+				goto fail;
+			}
+			/* XXX - add streamlocal support */
+			free(tmp);
+			/* Record it */
+			oarray = ret->permitremoteopen;
+			if ((ret->permitremoteopen = recallocarray(ret->permitremoteopen,
+												 ret->npermitremoteopen, ret->npermitremoteopen + 1,
+												 sizeof(*ret->permitremoteopen))) == NULL) {
+				free(opt);
+				ret->permitremoteopen = oarray;
+				goto alloc_fail;
+			}
+			ret->permitremoteopen[ret->npermitremoteopen++] = opt;
 		} else if (opt_match(&opts, "tunnel")) {
 			if ((opt = opt_dequote(&opts, &errstr)) == NULL)
 				goto fail;
@@ -562,6 +611,16 @@ sshauthopt_merge(const struct sshauthopt *primary,
 		    additional->permitopen, additional->npermitopen) != 0)
 			goto alloc_fail;
 	}
+	/* Cusstom: permitremoteopen functionality */
+	if (primary->npermitremoteopen > 0) {
+		if (dup_strings(&ret->permitremoteopen, &ret->npermitremoteopen,
+		    primary->permitremoteopen, primary->npermitremoteopen) != 0)
+			goto alloc_fail;
+	} else if (additional->npermitremoteopen > 0) {
+		if (dup_strings(&ret->permitremoteopen, &ret->npermitremoteopen,
+		    additional->permitremoteopen, additional->npermitremoteopen) != 0)
+			goto alloc_fail;
+	}
 
 	/* Flags are logical-AND (i.e. must be set in both for permission) */
 #define OPTFLAG(x) ret->x = (primary->x == 1) && (additional->x == 1)
@@ -648,6 +707,13 @@ sshauthopt_copy(const struct sshauthopt *orig)
 	if (dup_strings(&ret->env, &ret->nenv, orig->env, orig->nenv) != 0 ||
 	    dup_strings(&ret->permitopen, &ret->npermitopen,
 	    orig->permitopen, orig->npermitopen) != 0) {
+		sshauthopt_free(ret);
+		return NULL;
+	}
+	/* Custom: permitremoteopen functionality */
+	if (dup_strings(&ret->env, &ret->nenv, orig->env, orig->nenv) != 0 ||
+	    dup_strings(&ret->permitremoteopen, &ret->npermitremoteopen,
+	    orig->permitremoteopen, orig->npermitremoteopen) != 0) {
 		sshauthopt_free(ret);
 		return NULL;
 	}
@@ -782,7 +848,10 @@ sshauthopt_serialise(const struct sshauthopt *opts, struct sshbuf *m,
 	if ((r = serialise_array(m, opts->env,
 	    untrusted ? 0 : opts->nenv)) != 0 ||
 	    (r = serialise_array(m, opts->permitopen,
-	    untrusted ? 0 : opts->npermitopen)) != 0)
+	    untrusted ? 0 : opts->npermitopen)) != 0 ||
+			/* Custom: permitremoteopen functionality */
+	    (r = serialise_array(m, opts->permitremoteopen,
+	    untrusted ? 0 : opts->npermitremoteopen)) != 0)
 		return r;
 
 	/* success */
@@ -833,7 +902,10 @@ sshauthopt_deserialise(struct sshbuf *m, struct sshauthopt **optsp)
 	/* Array options */
 	if ((r = deserialise_array(m, &opts->env, &opts->nenv)) != 0 ||
 	    (r = deserialise_array(m,
-	    &opts->permitopen, &opts->npermitopen)) != 0)
+	    &opts->permitopen, &opts->npermitopen)) != 0 ||
+			/* Custom: permitremoteopen functionality */
+	    (r = deserialise_array(m,
+	    &opts->permitremoteopen, &opts->npermitremoteopen)) != 0)
 		goto out;
 
 	/* success */
