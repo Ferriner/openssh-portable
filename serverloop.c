@@ -749,6 +749,10 @@ permit_remote_forwarding(struct sshauthopt *auth_opts, struct Forward *fwd)
 	int permit = 0;
 	size_t i;
 
+    if (auth_opts->npermitremoteopen == 0) {
+        debug("permit_remote_forwarding: no restricting rules, forwarding accepted to %s:%i", fwd->listen_host, fwd->listen_port);
+        return 1;
+    }
 	debug("permit_remote_forwarding: verifying access to %s:%i", fwd->listen_host, fwd->listen_port);
 	for (i = 0; i < auth_opts->npermitremoteopen; i++) {
 		tmp = cp = xstrdup(auth_opts->permitremoteopen[i]);
@@ -762,7 +766,7 @@ permit_remote_forwarding(struct sshauthopt *auth_opts, struct Forward *fwd)
 				  __func__);
 
 		debug("permit_remote_forwarding: comparing with permitted host %s:%i", rforwardhost, rforwardport);
-		if (strcmp(fwd->listen_host, rforwardhost) == 0 && (fwd->listen_port == rforwardport)) {
+		if (strcmp(fwd->listen_host, rforwardhost) == 0 && ((rforwardport == 0) || (fwd->listen_port == rforwardport))) {
 			permit = 1;
 			debug("permit_remote_forwarding: accepted permission to host %s:%i", rforwardhost, rforwardport);
 		}
